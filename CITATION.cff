@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Adaptation of Water and Agricultural Systems to Snow Droughts: Code"
+version: 1.0.0
+date-released: "2026-07-01"
+authors:
+  - family-names: "Gustine"
+    given-names: "Rebecca N."
+  - family-names: "Liu"
+    given-names: "Mingliang"
+  - family-names: "Scarpare"
+    given-names: "Fabio V."
+  - family-names: "Kondal"
+    given-names: "Ashish"
+  - family-names: "Boll"
+    given-names: "Jan"
+  - family-names: "Lee"
+    given-names: "Christine M."
+  - family-names: "Adam"
+    given-names: "Jennifer C."
+license: MIT
+repository-code: "https://github.com/beccagustine/Yakima-Valley-Snow-Drought-Impacts"
+identifiers:
+  - description: "Archived snapshot of the code and output data on Zenodo"
+    type: doi
+    value: "10.5281/zenodo.XXXXXXX"
