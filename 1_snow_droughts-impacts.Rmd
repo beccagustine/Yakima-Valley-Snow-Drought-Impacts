@@ -1,0 +1,379 @@
+---
+title: "Connecting Snow Droughts to Other data"
+author: "Rebecca Gustine @BING.INC"
+date: "2023-03-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(data.table)
+library(ggplot2)
+library(gridExtra)
+library(gtable)
+# install.packages("dataRetrieval")
+library(dataRetrieval)
+library(sf)
+library(stats)
+# install.packages("RVAideMemoire")
+library(RVAideMemoire)
+
+```
+
+```{r making drought files}
+can <- read.csv("./Drought Type/gridmet_mean_value_drought_designation-3types.csv") %>% select(-X) #mean year; 3 types of droughts
+# can <- read.csv("F:/Snow Droughts/VIC/data/Drought Type/gridmet_max_value_drought_designation.csv") %>% select(-X) #max year
+
+mask <- read.csv("./Masks/Gridmet_2023_historical_drought_analysis.csv")
+
+```
+
+```{r snowmelt tracker}
+
+load("./Gridmet_snowmelt_tracker.rds")
+melt <- na.omit(cell_data)
+melt2 <- melt %>% filter(Cell %in% mask$File) %>% 
+  select(Year,numerator,denominator) %>% 
+  group_by(Year) %>% 
+  summarize_all(mean,na.rm=TRUE) %>% 
+  mutate(snowmelt = numerator/denominator) %>% 
+  select(Year,snowmelt)
+
+names(melt2) <- c("WY","snowmelt")
+
+```
+
+```{r stream temperature}
+#landsat temp
+temp <- read.csv("./landsat_yearly_average_water_temperature.csv") %>% select(-X)
+names(temp) <- c("WY","Stream_Temperature")
+
+#insitu temp check
+# in_situ_temp <- read.csv("./Ancillary Datasets/Stream Temperature/temperature_yakima_at_kiona.csv")
+# in_situ_temp$Date2 <- as.Date(in_situ_temp$Date, format="%m/%d/%Y")
+# in_situ_temp$Year <- year(in_situ_temp$Date2)
+# in_situ_temp$Month <- month(in_situ_temp$Date2)
+# in_situ_temp$WY <- ifelse(in_situ_temp$Month > 9, in_situ_temp$Year+1, in_situ_temp$Year)
+# in_situ_temp$deg_C <- as.numeric(in_situ_temp$deg_C)
+# in_situ_temp$Datetime <- as.POSIXct(
+#   paste(in_situ_temp$Date2, in_situ_temp$Time),
+#   format = "%Y-%m-%d %H:%M",
+#   tz = "America/Los_Angeles"
+# )
+# final_wt <- in_situ_temp %>% 
+#   filter(Date2 > "2018-10-01" & Date2 < "2022-09-30") %>% 
+#   filter(Month == 6 | Month == 7 |Month == 8 | Month == 9) %>% 
+#   select(WY,deg_C) %>% 
+#   group_by(WY) %>% 
+#   summarise_all(mean,na.rm=TRUE)
+
+
+```
+
+```{r soil moisture}
+
+load("./Gridmet_soil_moisture.rds")
+irr <- read.csv("./irrigated_grid_cells_yakima.csv") %>% 
+  mutate(File = paste("flux_",Lat,"_",Long,sep=""))
+
+cell_data$Irrigated <- ifelse(cell_data$File %in% irr$File,"Irrigated","Not")
+
+sm <- cell_data %>% filter(!(File %in% mask$File)) %>% filter(File %in% cropped$File) %>%  select(Year,sm,Irrigated) %>% #the gridcells that grow crops
+  group_by(Year,Irrigated) %>% 
+  summarise_all(mean, na.rm=TRUE) %>% as.data.frame() %>% na.omit()
+rm(cell_data)
+
+sm_irr <- sm %>% filter(Irrigated == "Irrigated") %>% select(Year,sm)
+names(sm_irr) <- c("WY","Irrigated")
+
+sm_final <- sm %>% filter(Irrigated == "Not") %>% select(Year,sm)
+names(sm_final) <- c("WY","Not Irrigated")
+
+sm2 <- merge(sm_irr,sm_final,by = "WY")
+
+```
+
+```{r reservoirs}
+
+read_csv_filename <- function(filename){
+  ret <- read.csv(filename)
+  name <- strsplit(filename,"/")[[1]][7]
+  name2 <- strsplit(name,".csv")[[1]][[1]]
+  ret$Source <- name2
+  ret$DATE <- as.Date(ret$DATE, format = "%m/%d/%Y")
+  ret <- ret %>% filter(DATE >= "1950-10-01")
+  ret
+}
+
+res_files <- list.files("./Reservoirs/", pattern = ".csv", full.names = TRUE)
+res <- lapply(res_files,read_csv_filename)
+res.df <- rbindlist(res)
+res.df <- na.omit(res.df)
+
+res_total <- res.df %>% select(DATE,AF) %>%  group_by(DATE) %>% summarize_all(sum,na.rm=TRUE) %>% filter(DATE <= "2022-09-30")
+res_total$Month <- month(res_total$DATE)
+res_total$Year <- year(res_total$DATE)
+res_total$WY <- ifelse(res_total$Month > 9, res_total$Year + 1, res_total$Year)
+
+res_yearly <- res_total %>% select(WY,AF) %>% group_by(WY) %>% summarise_all(sum,na.rm=TRUE)
+res_yearly$m3 <- res_yearly$AF * 1233.48
+res_yearly <- res_yearly %>% select(WY,m3)
+```
+
+```{r prorationing years}
+
+pro <- read.csv("./proration_years_drought_comparison.csv") %>% select(Year,Storage_control_Julian)
+names(pro) <- c("WY","Storage_Control_Date")
+
+```
+
+```{r streamflow data}
+siteNumber <- "USGS-12510500" #Yakima at Kiona WA
+site_info <- read_waterdata_monitoring_location(siteNumber)
+knitr::kable(site_info)
+parameterCd <- "00060" #discharge
+
+# Raw daily data:
+dis <- read_waterdata_daily(monitoring_location_id=siteNumber,
+                            parameter_code = parameterCd,
+                            time = c("1989-10-01", "2023-06-15"))
+
+dis2 <- dis %>% as.data.frame() %>% select(time, value) 
+names(dis2) <- c("Date","Value")
+dis2$m3s <- dis2$Value * 0.0283168
+dis2$month <- month(dis2$Date)
+dis2$year <- year(dis2$Date)
+dis2$WY <- ifelse(dis2$month > 9, dis2$year +1, dis2$year)
+
+dis_yearly <- dis2 %>% select(WY,m3s) %>% group_by(WY) %>% summarise_all(mean,na.rm = TRUE)
+```
+
+```{r crop yields}
+
+apples <- read.csv("./crops_filtered.csv")
+apples <- separate(apples,Value,sep="[,]",into=c("first","second"))
+apples$value <- as.numeric(paste0(apples$first,apples$second,sep=""))
+apples$value <- ifelse(is.na(apples$value) == TRUE,apples$first,apples$value)
+apples$value <- as.numeric(apples$value)
+
+crops <- apples %>% select(Year,Data.Item,Metric,value) %>%  filter(Metric ==" ACRES HARVESTED" | Metric == " ACRES PLANTED") %>% group_by(Year,Data.Item,Metric) %>% summarise_all(sum,na.rm = TRUE)
+
+names(crops)[1] <- "WY"
+crops2 <- merge(crops, can, by = "WY")
+crops3 <- crops2 %>% select(WY,Designation, Data.Item,Metric,value) %>% filter(Data.Item == "BARLEY, IRRIGATED " |
+                                                                                 Data.Item == "BARLEY, NONIRRIGATED " |
+                                                                                 Data.Item == "OATS " |
+                                                                                 Data.Item == "WHEAT, IRRIGATED " |
+                                                                                 Data.Item == "WHEAT, NONIRRIGATED " |
+                                                                                 Data.Item == "WHEAT, WINTER, IRRIGATED " |
+                                                                                 Data.Item == "WHEAT, WINTER, NONIRRIGATED " |
+                                                                                 Data.Item == "SUGARBEETS "
+                                                                                 )
+
+harv <- crops3 %>% filter(Metric == " ACRES HARVESTED")
+names(harv)[5] <- "val_harv"
+plan <- crops3 %>% filter(Metric == " ACRES PLANTED")
+names(plan)[5] <- "val_plan"
+harv_plan <- merge(harv,plan,by = c("WY","Data.Item"))
+harv_plan$ratio <- harv_plan$val_harv/harv_plan$val_plan
+harv_plan <- harv_plan %>% select(WY,Data.Item,Designation.x,ratio)
+names(harv_plan) <- c("WY","Data.Item","Designation","ratio")
+
+
+harv_plan$Data.Item <- factor(harv_plan$Data.Item, levels = c("BARLEY, IRRIGATED ","BARLEY, NONIRRIGATED ",
+                                                        "OATS ", "WHEAT, IRRIGATED " , "WHEAT, NONIRRIGATED " ,
+                                                        "WHEAT, WINTER, IRRIGATED " ,"WHEAT, WINTER, NONIRRIGATED ",
+                                                        "SUGARBEETS "), 
+                           labels = c("Barley (I)", "Barley", "Oats","Wheat (I)","Wheat","Winter\nWheat (I)","Winter\nWheat","Sugarbeets"))
+
+harvest_plot <- ggplot(harv_plan) + geom_boxplot(aes(y = ratio,group = as.factor(Designation),fill = as.factor(Designation))) + 
+  facet_grid(.~ Data.Item, scales = "free") +
+  scale_fill_manual(values = c("#996633","Red","orange"),na.value = "grey")+
+  labs(y="HAR") +
+  theme_light()+
+  theme(axis.text.x = element_blank(),axis.ticks.x = element_blank(),legend.position="NA")
+
+
+```
+
+```{r water stress index and irrigation demand}
+
+file <- "./Gridmet_crop_variables.rds"
+
+irrigationDemand <- function(input_data)  {
+  
+  load(input_data)
+  tmp <- na.omit(cell_data)
+  rm(cell_data)
+  tmp <- tmp %>% filter(Month > 4 & Month < 10) #Only looking at the months of May to September
+  tmp2 <- tmp %>% select(Year,irrig_total_mm,water_stress_index) %>% group_by(Year) %>% summarize_all(mean, na.rm = TRUE)
+  
+  return(tmp2)
+  
+}
+
+ws <- irrigationDemand(file)
+names(ws)[1] <- "WY"
+
+
+```
+
+```{r merging}
+
+final <- merge(can,melt2,by = "WY", all=TRUE)
+final2 <- merge(final,temp,by="WY",all = TRUE)
+final3 <- merge(final2,sm2,by="WY",all = TRUE)
+final4 <- merge(final3,res_yearly,by="WY",all=TRUE)
+final5 <- merge(final4,pro,by="WY",all=TRUE)
+final6 <- merge(final5,dis_yearly,by="WY",all=TRUE)
+final7 <- merge(final6,ws,by = "WY", all = TRUE)
+fin <- final7 %>% filter(WY > 1979 & WY < 2016)
+
+fin$Designation[which(is.na(fin$Designation)==TRUE)] <- "NoDrought"
+fin$Designation <- factor(fin$Designation, levels = c("Dry","Warm","Warm&Dry","NoDrought"))
+
+```
+
+```{r plotting, fig.height=7,fig.width=8}
+
+res_plot <- ggplot(fin) + geom_boxplot(aes(y = m3,group = Designation,fill = Designation)) +
+  labs(y = "cubic meters",fill = "")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey")) +
+  theme_light()+
+  theme(axis.text.x = element_blank(),legend.position = "NA")
+
+snowmelt_plot <- ggplot(fin) + geom_boxplot(aes(y = snowmelt,group = Designation,fill = Designation)) +
+  labs(fill = "",y = "Snowmelt Ratio")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+  theme_light()+
+  theme(axis.text.x = element_blank(),legend.position = "NA")
+
+temp_plot <- ggplot(fin) + geom_boxplot(aes(y = Stream_Temperature,group = Designation,fill = Designation)) +
+  labs(fill = "",y = "degree C")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+  theme_light()+
+  theme(axis.text.x = element_blank(),legend.position = c(0.15,0.8),legend.background = element_blank())
+
+# sm_plotting <- fin %>% select(Designation,Irrigated, `Not Irrigated`)
+# sm_plotting <- reshape2::melt(sm_plotting, id.vars = c("Designation"))
+# 
+# sm_plot <- ggplot(sm_plotting) + geom_boxplot(aes(y = value,group = Designation,fill = Designation)) +
+#   facet_wrap(.~variable) +
+#   labs(fill = "", y = "mm of Water")+
+#   scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+#   theme_light()+
+#   theme(axis.text.x = element_blank(),legend.position = "NA")
+
+sm_plotting_non <- fin %>% select(Designation,`Not Irrigated`)
+sm_plotting_non <- reshape2::melt(sm_plotting_non, id.vars = c("Designation"))
+
+sm_non_plot <- ggplot(sm_plotting_non) + geom_boxplot(aes(y = value,group = Designation,fill = Designation))+
+  labs(fill = "", y = "mm of Water")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+  theme_light()+
+  theme(axis.text.x = element_blank(),legend.position = "NA")
+
+dis_plot <- ggplot(fin) + geom_boxplot(aes(y = m3s,group = Designation,fill = Designation)) +
+  labs(fill = "",y = "cubic meters\nper second")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+  theme_light()+
+  theme(axis.text.x = element_blank(),legend.position = "NA",legend.background = element_blank())
+
+
+water_stress <- ggplot(fin) + geom_boxplot(aes(y = water_stress_index,group = Designation,fill = Designation)) +
+  labs(fill = "",y = "Water Stress Index")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+  theme_light()+
+  theme(axis.text.x = element_blank(),legend.position = "NA",legend.background = element_blank())
+
+
+
+p2 <- grid.arrange(res_plot,sm_non_plot,snowmelt_plot,dis_plot,ncol=2)
+
+p3 <- grid.arrange(temp_plot,water_stress,ncol = 2)
+
+grid.arrange(p2,harvest_plot,p3,ncol = 1)
+
+
+```
+
+```{r plotting prorationing, fig.height=4,fig.width=8.5}
+
+dates <- read.csv("./proration_years_drought_comparison.csv") %>% select(Proration,Designation_3_Mean)
+dates$id <- paste(dates$Proration,dates$Designation_3_Mean,sep=",\n")
+dates$id <- factor(dates$id, levels = c("Yes,\nNA","No,\nNA","Yes,\nWarm","No,\nWarm","Yes,\nWarm&Dry","No,\nWarm&Dry","Yes,\nDry"),
+                   labels = c("Yes,\nNoDrought","No,\nNoDrought","Yes,\nWarm","No,\nWarm","Yes,\nWarm&Dry","No,\nWarm&Dry","Yes,\nDry"))
+dates <- dates[c(-38),] #this is removing the last one that as rep of 2016 but it was only a few months so need to remove
+
+dates$Designation_3_Mean[is.na(dates$Designation_3_Mean)] <- "NoDrought"
+
+df_count <- dates %>%
+  count(Proration, Designation_3_Mean  ) %>%
+  complete(Proration, Designation_3_Mean  , fill = list(n = 0))
+
+df_count$Designation_3_Mean <- factor(df_count$Designation_3_Mean,
+                                       levels = c("NoDrought", "Dry", "Warm", "Warm&Dry"))
+
+# Plot: grouped bar with Proration fill, Designation on x-axis
+dates_plot2 <- ggplot(df_count, aes(x = Designation_3_Mean, y = n, fill = Proration)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black", width = 0.6) +
+  scale_fill_manual(values = c("Yes" = "brown", "No" = "gray70"),
+                    name = "") +
+  labs(x = "Snow Drought", y = "Count of Years") +
+  theme_light() +
+  theme(legend.position = "inside",
+        legend.position.inside = c(0.9,0.8),
+        legend.background = element_blank())
+
+scd_plot <- ggplot(fin) + geom_boxplot(aes(y = Storage_Control_Date,group = Designation,fill = Designation)) +
+  labs(fill = "",y = "Julian Day (from January 1st)")+
+  scale_fill_manual(values = c("#996633","Red","Orange","grey"))+
+  theme_light()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = c(0.15,0.85),legend.background = element_blank())
+
+grid.arrange(dates_plot2,scd_plot,ncol=2)
+
+
+```
+
+```{r average res levels in prorationing years}
+
+pro2 <- read.csv("F:/Snow Droughts/VIC/data/Ancillary Datasets/proration_years_drought_comparison.csv") %>% 
+  select(Year,Proration, Designation_3_Mean)
+names(pro2)[1] <- "WY"
+pro3 <- merge(pro2,res_yearly,by=c("WY"))
+
+ggplot(pro3) + geom_boxplot(aes(x=Designation_3_Mean, y=m3)) + facet_grid(.~ Proration)
+
+```
+
+```{r stats simple ANOVA test}
+#vars to check: water_stress_index, n (which is the number of fires), m3s (discharge), `Not Irrigated`, Storage_Control_Date,
+#snowmelt, Stream_Temperature, m3 (res storage)
+var <- fin %>% select(Designation, m3) #change here for the variable you want to use
+var$Designation[which(is.na(var$Designation)==TRUE)] <- "NoDrought"
+# var$n[which(is.na(var$n)==TRUE)] <- 0
+fit <- stats::aov(m3~Designation, data = var) #change here for the variable you're looking at
+summary(fit)
+
+#significant at ** (0.001): storage control date, discharge, water stress index
+#not significant: Stream_Temperature, soil moisture, reservoir storage
+#significant at *** (0.0001): snowmelt
+
+```
+
+
+
+
+
+
+
+
+
+
+

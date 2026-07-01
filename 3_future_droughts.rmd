@@ -1,0 +1,71 @@
+---
+title: "Type of Drought--future"
+author: "Rebecca Gustine"
+date: "2023-06-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+```
+
+
+```{r load data}
+
+data <- readRDS("./Drought Type/drought_designation_all_masked_no_May_historical_baseline_norms-3types.RData")
+
+```
+
+```{r processing data}
+outs <- data.frame(matrix(nrow = 50*34,ncol = 5))
+names(outs) <- c("Decade","Designation","n","RCP","GCM")
+count = 1
+
+for (i in 1:length(data)) {
+  
+  tmp <- data[[i]]
+  tmp$decade <- paste(substr(tmp$WY,1,3),"0",sep="")
+  tmp2 <- tmp %>% select(decade,Designation) %>% group_by(decade) %>% count(Designation) 
+  tmp2$rcp <- tmp$rcp[1]
+  tmp2$GCM <- tmp$GCM[1]
+  
+  outs[count:(count+nrow(tmp2)-1),1:5] <- tmp2
+  count = count + nrow(tmp2)
+  
+}
+
+```
+
+```{r plotting}
+outs <- na.omit(outs)
+outs <- outs %>% filter(Decade != 2090)
+
+supp.labs <- c("RCP 4.5", "RCP 8.5")
+names(supp.labs) <- c("rcp45", "rcp85")
+outs$Designation <- factor(outs$Designation, levels = c("NA","Dry","Warm","Warm&Dry"),
+                           labels = c("NoDrought","Dry","Warm","Warm&Dry"))
+
+droughts_plot <- ggplot(outs) + geom_boxplot(aes(x = Decade,y=n,fill = Designation), position=position_dodge2(preserve = "single"), outliers=FALSE) + #,outliers=FALSE
+  labs(y = "Occurrences of Snow Droughts Per Decade",fill="")+ 
+  facet_wrap(.~RCP, labeller = labeller(RCP = supp.labs),ncol=1) + 
+  scale_fill_manual(values = c("darkgrey","#996633","Red","Orange"))+
+  scale_y_continuous(breaks = scales::breaks_width(1))+
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = c(0.25,0.965),
+        legend.direction = "horizontal",
+        legend.background = element_blank())
+
+
+png(filename = "./Figures/revised/6_future_droughts.png", width = 8, height = 8, units = "in", res = 500)
+print(droughts_plot)
+dev.off()
+
+```
+
+
+

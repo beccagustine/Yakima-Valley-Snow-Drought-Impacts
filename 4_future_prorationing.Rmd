@@ -1,0 +1,159 @@
+---
+title: "Future Prorationing"
+author: "Rebecca Gustine"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(data.table)
+
+```
+
+A value of 1 means full (100%) allocation and 0 means no water
+```{r loading in prorationing data}
+
+pro <- list.files("./Future Prorationing RiverWare/",full.names = TRUE)
+pro <- pro[-c(28)] #this is removing the historical baseline run (has a different naming convention)
+
+formatPro <- function(file) {
+  
+  tmp <- read.csv(file,header=FALSE)
+  gcm <- strsplit(strsplit(file,"/")[[1]][6],"_")[[1]][1]
+  case = strsplit(strsplit(file,"/")[[1]][6],"_")[[1]][2]
+  
+  if (case == "hist"){
+    tmp$Date <- seq.Date(from = as.Date("1950-01-01"),to = as.Date("2005-12-01"),by = "month")
+    
+  } 
+  
+  if(case == "rcp45" | case == "rcp85") {
+    tmp$Date <- seq.Date(from = as.Date("2006-01-01"),to = as.Date("2094-12-01"),by = "month")
+
+    
+  } else{
+    
+  }
+  names(tmp) <- c("Pro","Date")
+  tmp$Month <- month(tmp$Date)
+  tmp$WY <- year(tmp$Date)
+  tmp2 <- tmp %>% filter(Month == 8) %>% select(WY, Pro)
+  # tmp2 <- tmp %>% filter (Month >= 6 & Month <= 9) %>% select(Pro,WY) %>% group_by(WY) %>% summarize_all(mean,na.rm=TRUE)
+  tmp2$GCM <- gcm
+  tmp2$decade <- as.numeric(paste(substr(tmp2$WY,1,3),"0",sep=""))
+  tmp2$rcp <- case
+  tmp2 <- tmp2 %>% filter(decade > 2010 & decade < 2090)
+  return(tmp2)
+  
+}
+
+final <- rbindlist(lapply(pro, formatPro))
+
+```
+
+```{r load data}
+
+irr_demand <- readRDS("./irrigation_demand_water_stress.RData")
+droughts <- readRDS("./drought_designation_all_masked_no_May_historical_baseline_norms-3types.RData")
+
+drought.df <- rbindlist(droughts)
+droughts2 <- drought.df %>% select(WY,Designation,rcp,GCM)
+names(droughts2)[1] <- "Year"
+
+```
+
+```{r processing data}
+decade <- function(data_in) {
+  tmp <- data_in
+  tmp$Decade <-paste(substr(tmp$Year,1,3),"0",sep="")
+  return(tmp)
+}
+
+data2 <- lapply(irr_demand,decade)
+
+
+```
+
+```{r plotting, fig.width=8,fig.height=4}
+outs <- rbindlist(data2)
+outs <- outs %>% filter(Decade != 2090)
+outs2 <- merge(outs,droughts2, by = c("Year","rcp","GCM"))
+outs2 <- outs2 %>% select(rcp,water_stress_index,Decade,Designation) %>% filter(Decade > 2010)
+outs_long <- melt(outs2,id.vars = c("rcp","Decade","Designation"))
+outs_long$Designation <- factor(outs_long$Designation, levels = c("NA","Dry","Warm","Warm&Dry"),
+                            labels = c("NoDrought","Dry","Warm","Warm&Dry"))
+
+pro <- final %>% select(rcp,decade,Designation,Percent)
+names(pro)[2] <- "Decade"
+pro_long <- melt(pro, id.vars = c("rcp","Decade","Designation"))
+pro_stress <- rbind(pro_long,outs_long)
+
+supp.labs <- c("RCP 4.5", "RCP 8.5")
+names(supp.labs) <- c("rcp45", "rcp85")
+
+var.labs <- c("Prorationing Percentage", "Water Stress Index")
+names(var.labs) <- c("Percent", "water_stress_index")
+
+wsi_plot <- ggplot(outs_long) + geom_boxplot(aes(x = Decade,y=value, fill=Designation)) + #,outliers=FALSE
+  labs(y = "Water Stress Index",fill="")+
+  facet_grid(variable~rcp, labeller = labeller(rcp = supp.labs,variable = var.labs),scales = "free")+ 
+  scale_fill_manual(values = c("darkgrey","#996633","Red","Orange"))+
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = c(0.23,0.94),
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key = element_blank(),
+        strip.background.y = element_blank(),
+        strip.text.y= element_blank())
+
+png(filename = "./Figures/7b_future_ws-outliers.png", width = 8, height = 4, units = "in", res = 500)
+print(wsi_plot)
+dev.off()
+
+pro_long$Decade <- as.numeric(pro_long$Decade)
+
+pro_plot <- ggplot(pro_long) + geom_boxplot(aes(x = factor(Decade),y=value, fill=Designation)) + #,outliers=FALSE
+  labs(y = "Prorationing Percentage",fill="",x="Decade")+
+  facet_grid(variable~rcp, labeller = labeller(rcp = supp.labs,variable = var.labs),scales = "free")+ 
+  scale_fill_manual(values = c("darkgrey","#996633","Red","Orange"))+
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = "NULL",
+        strip.background.y = element_blank(),
+        strip.text.y= element_blank())
+
+
+
+png(filename = "./Figures/7a_future_pro-outliers.png", width = 8, height = 4, units = "in", res = 500)
+print(pro_plot)
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

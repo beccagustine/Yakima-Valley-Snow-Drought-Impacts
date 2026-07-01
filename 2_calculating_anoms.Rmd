@@ -1,0 +1,104 @@
+---
+title: "Anomalies"
+author: "Rebecca Gustine"
+date: "2023-06-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+
+```
+
+plot temp, precip, swe, departures for all drought years
+```{r loading data}
+drought <- read.csv("./Drought Type/gridmet_mean_value_drought_designation-3types.csv")
+
+drought$SWE_Departure <- drought$SWE-drought$SWE_Norm
+drought$P_Departure <- drought$Precip - drought$Precip_Norm
+drought$T_Departure <- drought$AirTemp - drought$Temp_Norm
+
+tmp <- drought %>% select(WY,SWE_Departure,P_Departure,T_Departure,Designation)
+
+drought2 <- melt(tmp,id.vars = c("WY","Designation"))
+vars <- drought2 %>% filter(variable != "SWE_Departure")
+
+rect <- vars %>% select(WY,value,Designation)
+rect2 <- rect[!duplicated(rect[ , c("WY", "Designation")]), ]
+rect2$value <- -1
+rect3 <- rect2
+rect3$value <- 2.5
+test <- rbind(rect2,rect3)
+# no_swe_plot <- ggplot() +
+#   geom_tile(data = test,aes(as.factor(WY),value,fill = as.factor(Designation)),alpha=0.4)+  
+#   geom_col(data = vars, aes(x=as.factor(WY),y=value,group=variable,fill=variable),position="dodge2") +
+#   scale_fill_manual(values = c("lightblue","lightsalmon","goldenrod1", "blue","red"),
+#                     breaks = c("Dry","Warm","Warm&Dry", "P_Departure", "T_Departure"),
+#                     labels = c("Dry","Warm","Warm&Dry", "P","T"))+
+#   labs(y = "Departure From Normal",x = "Year",fill="")+
+#   theme_classic()+ theme(axis.text.x = element_text(angle=90,vjust=0.3),
+#                          axis.title.y = element_text(margin = margin(t = 0, r = 13, b = 0, l = 0)),
+#                          legend.key = element_rect(colour="white"),
+#                          legend.text = element_text(color = "white"),
+#                          legend.title = element_text(color = "white")) +
+#   guides(fill = guide_legend(override.aes= list(alpha = 0, color = "white")))
+
+
+rect_swe <- rect2
+rect_swe$value <- -140
+rect_swe2 <- rect_swe
+rect_swe2$value <- 150
+test2 <- rbind(rect_swe,rect_swe2)
+swe_plot <- ggplot() +
+  geom_tile(data = test2,aes(as.factor(WY),value,fill = as.factor(Designation)),alpha=0.4)+  
+  geom_col(data = drought2, aes(x=as.factor(WY),y=value,group=variable,fill=variable),position="dodge2") +
+  scale_fill_manual(values = c("lightblue","lightsalmon","goldenrod1","azure4","blue","red"),
+                    breaks = c("Dry","Warm","Warm&Dry", "SWE_Departure", "P_Departure", "T_Departure"),
+                    labels = c("Dry","Warm","Warm&Dry", "SWE", "P","T"))+
+  labs(y = "Departure From Normal",fill = "",colour = "Drought\nType")+
+  theme_classic() + theme(axis.text.x = element_blank(),
+                          axis.title.x = element_blank(),
+                          axis.ticks.x = element_blank())
+
+
+grid.arrange(swe_plot,no_swe_plot,ncol=1)
+
+vars2 <- drought2 %>% filter(variable == "SWE_Departure") #if noly plotting SWE per reviewer comments
+swe_only_plot <- ggplot() +
+  geom_tile(data = test2,aes(as.factor(WY),value,fill = as.factor(Designation)),alpha=0.4)+  
+  geom_col(data = vars2, aes(x=as.factor(WY),y=value,group=variable,fill=variable),position="dodge2") +
+  scale_fill_manual(values = c("lightblue","lightsalmon","goldenrod1","azure4"),
+                    breaks = c("Dry","Warm","Warm&Dry", "SWE_Departure"),
+                    labels = c("Dry","Warm","Warm&Dry", "SWE"),na.value="white")+
+  labs(y = "Departure From Normal",fill = "",colour = "Drought\nType",x="Year")+
+  theme_classic() +
+  theme(axis.text.x = element_text(angle=90))
+
+```
+
+```{r plotting scatter plot}
+scatter <- tmp %>% filter(is.na(Designation) == FALSE)
+
+ggplot(scatter,aes(x=P_Departure,y=T_Departure, fill=SWE_Departure)) + geom_point(shape=21,size=4)+
+  scale_fill_gradient(low = "red", high = "blue") +
+  geom_text_repel(aes(label = WY))+
+  geom_vline(xintercept=0,linewidth=1) +
+  geom_hline(yintercept = 0,linewidth=1) +
+  ylim(-2.5,2.5) +
+  xlim(-2.5,1.5)+
+  labs(y="Temperature Departure (degrees C)",x="Precipitation Departure (mm)", fill = "") +
+  theme_light()+
+  theme(legend.position="inside",
+        legend.position.inside = c(0.92,0.85),
+        legend.background = element_blank(),
+        legend.text = element_text(size=12)) 
+
+```
+
+
+
+
+
